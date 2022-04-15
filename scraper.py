@@ -2,7 +2,8 @@ import wmi
 import os
 import time
 from prometheus_client import start_http_server, Gauge
-# ensure open hardware monitor is installed to read values from WMI https://openhardwaremonitor.org/
+# ensure open hardware monitor is installed to read values from WMI 
+# https://openhardwaremonitor.org/
 
 def collect_data():
     w = wmi.WMI(namespace="root\OpenHardwareMonitor")
@@ -22,9 +23,21 @@ class AppMetrics:
         self.polling_interval_seconds = polling_interval_seconds
 
         # Prometheus metrics to collect
-        self.temperature = Gauge("temperature_degrees", "Current temperature", ["temp_sensor"])
-        self.power = Gauge("power_watts", "Current power usage", ["power_sensor"])
-        self.fan = Gauge("fan_rpm", "Current fan speed", ["fan_sensor"])
+        self.temperature = Gauge(
+            "temperature_degrees",
+            "Current temperature",
+            ["temp_sensor"]
+        )
+        self.power = Gauge(
+            "power_watts",
+            "Current power usage",
+            ["power_sensor"]
+        )
+        self.fan = Gauge(
+            "fan_rpm",
+            "Current fan speed",
+            ["fan_sensor"]
+        )
 
     def run_metrics_loop(self):
         while True:

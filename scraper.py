@@ -2,8 +2,7 @@ import wmi
 import os
 import time
 from prometheus_client import start_http_server, Gauge
-
-# ensure open hardware monitor is installed to read values from WMI
+# ensure open hardware monitor is installed to read values from WMI https://openhardwaremonitor.org/
 
 def collect_data():
     w = wmi.WMI(namespace="root\OpenHardwareMonitor")

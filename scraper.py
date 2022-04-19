@@ -2,16 +2,17 @@ import wmi
 import os
 import time
 from prometheus_client import start_http_server, Gauge
-# ensure open hardware monitor is installed to read values from WMI 
-# https://openhardwaremonitor.org/
+
+''' ensure open hardware monitor is installed to read values from WMI '''
+''' https://openhardwaremonitor.org/ '''
 
 def collect_data():
     w = wmi.WMI(namespace="root\OpenHardwareMonitor")
     temperature_infos = w.Sensor()
-    values = { 'temp': {}, 'power': {}, 'fan': {} }
+    values = { 'temperature': {}, 'power': {}, 'fan': {} }
     for sensor in temperature_infos:
         if sensor.SensorType==u'Temperature':
-            values['temp'][sensor.Name] = sensor.Value
+            values['temperature'][sensor.Name] = sensor.Value
         if sensor.SensorType==u'Power':
             values['power'][sensor.Name] = sensor.Value
         if sensor.SensorType==u'Fan':
@@ -26,7 +27,7 @@ class AppMetrics:
         self.temperature = Gauge(
             "temperature_degrees",
             "Current temperature",
-            ["temp_sensor"]
+            ["temperature_sensor"]
         )
         self.power = Gauge(
             "power_watts",
@@ -49,15 +50,15 @@ class AppMetrics:
         data = collect_data()
 
         # Update Prometheus metrics with application metrics
-        for key, value in data['temp'].items():
+        for key, value in data['temperature'].items():
             self.temperature.labels(key).set(value)
         for key, value in data['fan'].items():
             self.fan.labels(key).set(value)
         for key, value in data['power'].items():
             self.power.labels(key).set(value)
 
-#getattr(object, attrname)
-#setattr(object, attrname, value)
+        #getattr(object, attrname)
+        #setattr(object, attrname, value)
            
 def main():
     polling_interval_seconds = int(os.getenv("POLLING_INTERVAL_SECONDS", "5"))

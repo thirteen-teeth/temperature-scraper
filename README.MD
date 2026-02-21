@@ -55,7 +55,7 @@ Get-ScheduledTask    -TaskName 'TemperatureScraper' | Select-Object TaskName, St
 The scraper reads the following environment variables:
 
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `POLLING_INTERVAL_SECONDS` | `5` | How often to poll OHM sensors |
 | `EXPORTER_PORT` | `9877` | Port the Prometheus HTTP server listens on |
 

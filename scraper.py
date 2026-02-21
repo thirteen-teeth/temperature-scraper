@@ -59,7 +59,7 @@ class AppMetrics:
 
         #getattr(object, attrname)
         #setattr(object, attrname, value)
-           
+
 def main():
     polling_interval_seconds = int(os.getenv("POLLING_INTERVAL_SECONDS", "5"))
     exporter_port = int(os.getenv("EXPORTER_PORT", "9877"))

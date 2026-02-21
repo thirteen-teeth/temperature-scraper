@@ -61,7 +61,7 @@ if ($Uninstall) {
         Unregister-ScheduledTask -TaskName $ScraperTaskName -Confirm:$false
         Write-Host "Removed scheduled task: $ScraperTaskName" -ForegroundColor Green
     } else {
-        Write-Host "Scheduled task '$ScraperTaskName' not found — skipping." -ForegroundColor Yellow
+        Write-Host "Scheduled task not found - skipping." -ForegroundColor Yellow
     }
 
     # Remove OHM service
@@ -71,7 +71,7 @@ if ($Uninstall) {
         sc.exe delete $OhmServiceName | Out-Null
         Write-Host "Removed service: $OhmServiceName" -ForegroundColor Green
     } else {
-        Write-Host "Service '$OhmServiceName' not found — skipping." -ForegroundColor Yellow
+        Write-Host "Service not found - skipping." -ForegroundColor Yellow
     }
 
     # Remove OHM install directory
@@ -91,62 +91,100 @@ if ($Uninstall) {
 }
 
 # ============================================================================
-# Step 1 — OpenHardwareMonitor
+# Step 1 - OpenHardwareMonitor
 # ============================================================================
 if ($SkipOHM) {
-    Write-Host "`nStep 1/3 — Skipping OpenHardwareMonitor installation (-SkipOHM)." -ForegroundColor Yellow
+    Write-Host "`nStep 1/3 - Skipping OpenHardwareMonitor installation (-SkipOHM)." -ForegroundColor Yellow
 } else {
-    Write-Host "`nStep 1/3 — Installing OpenHardwareMonitor as a service..." -ForegroundColor Cyan
+    Write-Host "`nStep 1/3 - Checking OpenHardwareMonitor..." -ForegroundColor Cyan
 
-    $fallbackOhmUrl = "https://openhardwaremonitor.org/files/openhardwaremonitor-v0.9.6.zip"
-    $nssmUrl        = "https://nssm.cc/release/nssm-2.24.zip"
+    $ohmSvc = Get-Service -Name $OhmServiceName -ErrorAction SilentlyContinue
 
-    # Try to resolve the latest release from the OHM homepage
-    $ohmUrl = $fallbackOhmUrl
-    try {
-        $resp  = Invoke-WebRequest -Uri "https://openhardwaremonitor.org/" -UseBasicParsing
-        $match = [regex]::Match(
-            $resp.Content,
-            "openhardwaremonitor-v\d+\.\d+\.\d+\.zip",
-            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-        )
-        if ($match.Success) { $ohmUrl = "https://openhardwaremonitor.org/files/$($match.Value)" }
-    } catch {
-        Write-Host "Could not fetch latest OHM version — using fallback URL." -ForegroundColor Yellow
+    if ($ohmSvc -and (Test-Path $OhmExe)) {
+        # Already installed - just ensure it is running
+        if ($ohmSvc.Status -ne "Running") {
+            Write-Host "OHM service exists but is not running - starting it..." -ForegroundColor Yellow
+            Start-Service -Name $OhmServiceName
+        } else {
+            Write-Host "OpenHardwareMonitor is already installed and running - skipping." -ForegroundColor Green
+        }
+    } else {
+        Write-Host "Installing OpenHardwareMonitor as a service..." -ForegroundColor Cyan
+
+        $fallbackOhmUrl = "https://openhardwaremonitor.org/files/openhardwaremonitor-v0.9.6.zip"
+        $nssmUrl        = "https://nssm.cc/release/nssm-2.24.zip"
+
+        # Try to resolve the latest release from the OHM homepage
+        $ohmUrl = $fallbackOhmUrl
+        try {
+            $resp  = Invoke-WebRequest -Uri "https://openhardwaremonitor.org/" -UseBasicParsing
+            $match = [regex]::Match(
+                $resp.Content,
+                "openhardwaremonitor-v\d+\.\d+\.\d+\.zip",
+                [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+            )
+            if ($match.Success) { $ohmUrl = "https://openhardwaremonitor.org/files/$($match.Value)" }
+        } catch {
+            Write-Host "Could not fetch latest OHM version - using fallback URL." -ForegroundColor Yellow
+        }
+
+        Write-Host "Downloading OpenHardwareMonitor..."
+        Invoke-WebRequest -Uri $ohmUrl -OutFile $OhmZip
+        $ohmExtractTemp = "$env:TEMP\ohm-extract"
+        if (Test-Path $ohmExtractTemp) { Remove-Item $ohmExtractTemp -Recurse -Force }
+        Expand-Archive -Path $OhmZip -DestinationPath $ohmExtractTemp
+
+        # The zip may contain a subdirectory - find the exe wherever it landed
+        $ohmExeFound = Get-ChildItem -Path $ohmExtractTemp -Filter "OpenHardwareMonitor.exe" -Recurse | Select-Object -First 1
+        if (-not $ohmExeFound) {
+            Write-Error "Could not find OpenHardwareMonitor.exe in the downloaded archive."
+            exit 1
+        }
+        if (Test-Path $OhmDir) { Remove-Item $OhmDir -Recurse -Force }
+        Move-Item -Path $ohmExeFound.DirectoryName -Destination $OhmDir
+        Remove-Item $ohmExtractTemp -Recurse -Force -ErrorAction SilentlyContinue
+        $OhmExe = Join-Path $OhmDir "OpenHardwareMonitor.exe"
+
+        # Download NSSM only if not already extracted
+        if (Test-Path $NssmExe) {
+            Write-Host "NSSM already present - skipping download." -ForegroundColor Yellow
+        } else {
+            Write-Host "Downloading NSSM..."
+            Invoke-WebRequest -Uri $nssmUrl -OutFile $NssmZip
+            if (Test-Path $NssmDir) { Remove-Item $NssmDir -Recurse -Force }
+            Expand-Archive -Path $NssmZip -DestinationPath $NssmDir
+        }
+
+        # Remove existing (broken) service if present; wait for SCM to deregister
+        if ($ohmSvc) {
+            if ($ohmSvc.Status -ne "Stopped") { Stop-Service -Name $OhmServiceName -Force }
+            sc.exe delete $OhmServiceName | Out-Null
+            Write-Host "Removed existing OHM service." -ForegroundColor Yellow
+            Start-Sleep -Seconds 2
+        }
+
+        Write-Host "Installing the OHM service..."
+        & $NssmExe install $OhmServiceName $OhmExe
+        & $NssmExe set     $OhmServiceName AppDirectory $OhmDir
+        & $NssmExe set     $OhmServiceName Start SERVICE_AUTO_START
+        & $NssmExe set     $OhmServiceName AppNoConsole 1
+
+        Write-Host "Starting the OHM service..."
+        & $NssmExe start $OhmServiceName
+        Start-Sleep -Seconds 2
+        $ohmStatus = (Get-Service -Name $OhmServiceName -ErrorAction SilentlyContinue).Status
+        if ($ohmStatus -ne "Running") {
+            Write-Warning "OHM service status is '$ohmStatus' - it may still be starting. Check with: Get-Service $OhmServiceName"
+        } else {
+            Write-Host "OpenHardwareMonitor service installed and started." -ForegroundColor Green
+        }
     }
-
-    Write-Host "Downloading OpenHardwareMonitor..."
-    Invoke-WebRequest -Uri $ohmUrl    -OutFile $OhmZip
-    if (Test-Path $OhmDir) { Remove-Item $OhmDir -Recurse -Force }
-    Expand-Archive -Path $OhmZip -DestinationPath $OhmDir
-
-    Write-Host "Downloading NSSM..."
-    Invoke-WebRequest -Uri $nssmUrl -OutFile $NssmZip
-    if (Test-Path $NssmDir) { Remove-Item $NssmDir -Recurse -Force }
-    Expand-Archive -Path $NssmZip -DestinationPath $NssmDir
-
-    # Replace existing service if present
-    $svc = Get-Service -Name $OhmServiceName -ErrorAction SilentlyContinue
-    if ($svc) {
-        if ($svc.Status -ne "Stopped") { Stop-Service -Name $OhmServiceName -Force }
-        sc.exe delete $OhmServiceName | Out-Null
-        Write-Host "Removed existing OHM service." -ForegroundColor Yellow
-    }
-
-    Write-Host "Installing and starting the OHM service..."
-    & $NssmExe install $OhmServiceName $OhmExe
-    & $NssmExe set     $OhmServiceName AppDirectory $OhmDir
-    & $NssmExe set     $OhmServiceName Start SERVICE_AUTO_START
-    & $NssmExe set     $OhmServiceName AppNoConsole 1
-    Start-Service -Name $OhmServiceName
-
-    Write-Host "OpenHardwareMonitor service installed and started." -ForegroundColor Green
 }
 
 # ============================================================================
-# Step 2 — Python virtual environment
+# Step 2 - Python virtual environment
 # ============================================================================
-Write-Host "`nStep 2/3 — Setting up Python virtual environment..." -ForegroundColor Cyan
+Write-Host "`nStep 2/3 - Setting up Python virtual environment..." -ForegroundColor Cyan
 
 try {
     $pythonVersion = & python --version 2>&1
@@ -157,7 +195,7 @@ try {
 }
 
 if (Test-Path $VenvPath) {
-    Write-Host "Virtual environment already exists at '.venv' — skipping creation." -ForegroundColor Yellow
+    Write-Host "Virtual environment already exists at '.venv' - skipping creation." -ForegroundColor Yellow
 } else {
     Write-Host "Creating virtual environment at '.venv'..."
     python -m venv $VenvPath
@@ -173,50 +211,60 @@ Write-Host "Installing packages from requirements.txt..."
 Write-Host "Dependencies installed." -ForegroundColor Green
 
 # ============================================================================
-# Step 3 — Scraper scheduled task
+# Step 3 - Scraper scheduled task
 # ============================================================================
-Write-Host "`nStep 3/3 — Registering scheduled task '$ScraperTaskName'..." -ForegroundColor Cyan
+Write-Host "`nStep 3/3 - Checking scheduled task '$ScraperTaskName'..." -ForegroundColor Cyan
 
 $existing = Get-ScheduledTask -TaskName $ScraperTaskName -ErrorAction SilentlyContinue
+$needsRegister = $true
+
 if ($existing) {
-    if ($existing.State -eq "Running") { Stop-ScheduledTask -TaskName $ScraperTaskName }
-    Unregister-ScheduledTask -TaskName $ScraperTaskName -Confirm:$false
-    Write-Host "Replaced existing task." -ForegroundColor Yellow
+    $existingExe = $existing.Actions | Select-Object -First 1 -ExpandProperty Execute
+    if ($existingExe -eq $PythonExe) {
+        Write-Host "Scheduled task already registered with correct configuration - skipping." -ForegroundColor Green
+        $needsRegister = $false
+    } else {
+        Write-Host "Scheduled task configuration has changed - re-registering." -ForegroundColor Yellow
+        if ($existing.State -eq "Running") { Stop-ScheduledTask -TaskName $ScraperTaskName }
+        Unregister-ScheduledTask -TaskName $ScraperTaskName -Confirm:$false
+    }
 }
 
-$action = New-ScheduledTaskAction `
-    -Execute    $PythonExe `
-    -Argument   "`"$ScraperScript`"" `
-    -WorkingDirectory $ScriptDir
+if ($needsRegister) {
+    $action = New-ScheduledTaskAction `
+        -Execute          $PythonExe `
+        -Argument         "`"$ScraperScript`"" `
+        -WorkingDirectory $ScriptDir
 
-# Trigger: run at every system startup
-$trigger = New-ScheduledTaskTrigger -AtStartup
+    # Trigger: run at every system startup
+    $trigger = New-ScheduledTaskTrigger -AtStartup
 
-# Settings: run indefinitely, restart up to 5 times on failure, allow on battery
-$settings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit     ([TimeSpan]::Zero) `
-    -RestartCount           5 `
-    -RestartInterval        (New-TimeSpan -Minutes 1) `
-    -MultipleInstances      IgnoreNew
+    # Settings: run indefinitely, restart up to 5 times on failure, allow on battery
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit  ([TimeSpan]::Zero) `
+        -RestartCount        5 `
+        -RestartInterval     (New-TimeSpan -Minutes 1) `
+        -MultipleInstances   IgnoreNew
 
-# Principal: run as SYSTEM with highest privileges (required for WMI/OHM access)
-$principal = New-ScheduledTaskPrincipal `
-    -UserId    "SYSTEM" `
-    -LogonType ServiceAccount `
-    -RunLevel  Highest
+    # Principal: run as SYSTEM with highest privileges (required for WMI/OHM access)
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId    "SYSTEM" `
+        -LogonType ServiceAccount `
+        -RunLevel  Highest
 
-Register-ScheduledTask `
-    -TaskName    $ScraperTaskName `
-    -Action      $action `
-    -Trigger     $trigger `
-    -Settings    $settings `
-    -Principal   $principal `
-    -Description "Prometheus exporter for hardware sensors via OpenHardwareMonitor. Managed by setup.ps1." `
-    -Force | Out-Null
+    Register-ScheduledTask `
+        -TaskName    $ScraperTaskName `
+        -Action      $action `
+        -Trigger     $trigger `
+        -Settings    $settings `
+        -Principal   $principal `
+        -Description "Prometheus exporter for hardware sensors via OpenHardwareMonitor. Managed by setup.ps1." `
+        -Force | Out-Null
 
-Write-Host "Scheduled task registered successfully." -ForegroundColor Green
+    Write-Host "Scheduled task registered successfully." -ForegroundColor Green
+}
 
 if ($Start) {
     Write-Host "`nStarting scraper task now..." -ForegroundColor Cyan
@@ -226,9 +274,9 @@ if ($Start) {
     Write-Host "Task state: $state" -ForegroundColor Green
 }
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # Summary
-# ---------------------------------------------------------------------------
+# ============================================================================
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "  Setup complete!" -ForegroundColor Green
@@ -244,8 +292,8 @@ Write-Host ""
 Write-Host "The scraper will start automatically on the next system boot." -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Useful commands:"
-Write-Host "  Start now    : Start-ScheduledTask  -TaskName '$ScraperTaskName'"
-Write-Host "  Stop         : Stop-ScheduledTask   -TaskName '$ScraperTaskName'"
-Write-Host "  Check status : Get-ScheduledTask    -TaskName '$ScraperTaskName' | Select-Object TaskName, State"
+Write-Host "  Start now    : Start-ScheduledTask -TaskName $ScraperTaskName"
+Write-Host "  Stop         : Stop-ScheduledTask  -TaskName $ScraperTaskName"
+Write-Host "  Check status : Get-ScheduledTask   -TaskName $ScraperTaskName | Select-Object TaskName, State"
 Write-Host "  Uninstall    : .\setup.ps1 -Uninstall"
 Write-Host ""

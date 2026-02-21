@@ -1,19 +1,31 @@
-# Requires admin
+#Requires -RunAsAdministrator
+<#
+.SYNOPSIS
+    Thin wrapper — OHM installation is now handled by setup.ps1.
+    This script is kept for backwards compatibility with the README.
+
+    To install OHM only (without setting up the scraper), run:
+        .\setup.ps1 -SkipOHM:$false
+
+    To run the full setup (OHM + venv + scheduled task), run:
+        .\setup.ps1
+
+.PARAMETER Uninstall
+    Forwards to: .\setup.ps1 -Uninstall
+#>
 param(
-	[switch]$Uninstall
+    [switch]$Uninstall
 )
 
-$ErrorActionPreference = "Stop"
+$ScriptDir = $PSScriptRoot
 
-$ohmDir = "C:\Program Files\OpenHardwareMonitor"
-$ohmZip = "$env:TEMP\openhardwaremonitor.zip"
-$ohmExe = "$ohmDir\OpenHardwareMonitor.exe"
-
-$nssmZip = "$env:TEMP\nssm.zip"
-$nssmDir = "$env:TEMP\nssm"
-$nssmExe = "$nssmDir\nssm-2.24\win64\nssm.exe"
-
-$serviceName = "OpenHardwareMonitor"
+if ($Uninstall) {
+    Write-Host "Forwarding to setup.ps1 -Uninstall..." -ForegroundColor Yellow
+    & "$ScriptDir\setup.ps1" -Uninstall
+} else {
+    Write-Host "Forwarding to setup.ps1..." -ForegroundColor Yellow
+    & "$ScriptDir\setup.ps1"
+}
 
 if ($Uninstall) {
 	$svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue

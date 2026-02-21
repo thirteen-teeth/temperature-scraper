@@ -6,50 +6,64 @@ Collects Windows hardware sensor data (temperature, power, fan) from Open Hardwa
 
 - Windows
 - Python 3.9+
-- Open Hardware Monitor installed and running (or installed as a service)
+- PowerShell (run as Administrator for setup)
 
-## Install dependencies
+## Setup
 
-```bash
-python -m pip install -r requirements.txt
-```
+`setup.ps1` handles everything in one shot:
 
-## Install Open Hardware Monitor as a service (optional)
+1. Downloads and installs **OpenHardwareMonitor** as a Windows service (via NSSM)
+2. Creates a **Python virtual environment** and installs dependencies
+3. Registers the **Prometheus exporter** as a Windows Scheduled Task that starts automatically at boot
 
-Run PowerShell as Administrator:
-
-```powershell
-./install-openhardwaremonitor.ps1
-```
-
-Uninstall:
+Open PowerShell as Administrator and run:
 
 ```powershell
-./install-openhardwaremonitor.ps1 -Uninstall
+.\setup.ps1
 ```
 
-## Run the exporter
+To also start the scraper immediately (without waiting for a reboot):
 
-```bash
-python scraper.py
+```powershell
+.\setup.ps1 -Start
 ```
 
-The Prometheus endpoint will be available at http://localhost:9877/metrics by default.
+If OpenHardwareMonitor is already installed, skip that step:
+
+```powershell
+.\setup.ps1 -SkipOHM
+```
+
+### Uninstall
+
+Removes the scheduled task, OHM service, and cleans up downloaded files:
+
+```powershell
+.\setup.ps1 -Uninstall
+```
+
+### Manage the scraper manually
+
+```powershell
+Start-ScheduledTask  -TaskName 'TemperatureScraper'
+Stop-ScheduledTask   -TaskName 'TemperatureScraper'
+Get-ScheduledTask    -TaskName 'TemperatureScraper' | Select-Object TaskName, State
+```
 
 ## Configuration
 
-Environment variables:
+The scraper reads the following environment variables:
 
-- `POLLING_INTERVAL_SECONDS` (default: `5`)
-- `EXPORTER_PORT` (default: `9877`)
-
-Example:
-
-```bash
-POLLING_INTERVAL_SECONDS=2 EXPORTER_PORT=9100 python scraper.py
-```
+| Variable | Default | Description |
+|---|---|---|
+| `POLLING_INTERVAL_SECONDS` | `5` | How often to poll OHM sensors |
+| `EXPORTER_PORT` | `9877` | Port the Prometheus HTTP server listens on |
 
 ## Metrics
+
+The Prometheus endpoint is available at `http://localhost:9877/metrics` by default.
+
+Exposed metrics:
 
 - `temperature_degrees{temperature_sensor="..."}`
 - `power_watts{power_sensor="..."}`

@@ -45,9 +45,9 @@ Removes the scheduled task, OHM service, and cleans up downloaded files:
 ### Manage the scraper manually
 
 ```powershell
-Start-ScheduledTask  -TaskName 'TemperatureScraper'
-Stop-ScheduledTask   -TaskName 'TemperatureScraper'
-Get-ScheduledTask    -TaskName 'TemperatureScraper' | Select-Object TaskName, State
+Start-ScheduledTask -TaskName 'TemperatureScraper'
+Stop-ScheduledTask -TaskName 'TemperatureScraper'
+Get-ScheduledTask -TaskName 'TemperatureScraper' | Select-Object TaskName, State
 ```
 
 ## Manual Virtual Environment Setup
@@ -105,8 +105,16 @@ The scraper reads the following environment variables:
 
 The Prometheus endpoint is available at `http://localhost:9877/metrics` by default.
 
-Exposed metrics:
+Metrics are discovered dynamically from OpenHardwareMonitor and exposed using the naming pattern `ohm_{sensor_type}{sensor="..."}`. All metrics use a single `sensor` label containing the sensor name.
 
-- `temperature_degrees{temperature_sensor="..."}`
-- `power_watts{power_sensor="..."}`
-- `fan_rpm{fan_sensor="..."}`
+| Metric | Unit | Example sensor labels |
+| --- | --- | --- |
+| `ohm_temperature_celsius{sensor="..."}` | °C | `CPU Package`, `CPU Core #1` |
+| `ohm_power_watts{sensor="..."}` | Watts | `CPU Package`, `CPU Cores` |
+| `ohm_fan_rpm{sensor="..."}` | RPM | `CPU Fan`, `Chassis Fan #1` |
+| `ohm_load_percent{sensor="..."}` | % | `CPU Total`, `CPU Core #1` |
+| `ohm_clock_megahertz{sensor="..."}` | MHz | `CPU Core #1`, `Bus Speed` |
+| `ohm_voltage_volts{sensor="..."}` | V | `CPU VCore` |
+| `ohm_data_gigabytes{sensor="..."}` | GB | `Used Memory`, `Available Memory` |
+
+> Additional sensor types reported by OpenHardwareMonitor will be exposed automatically using the same `ohm_{sensor_type}` pattern.

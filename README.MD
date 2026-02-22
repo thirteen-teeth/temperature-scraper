@@ -47,6 +47,7 @@ Removes the scheduled task, OHM service, and cleans up downloaded files:
 ```powershell
 Start-ScheduledTask -TaskName 'TemperatureScraper'
 Stop-ScheduledTask -TaskName 'TemperatureScraper'
+Stop-ScheduledTask -TaskName 'TemperatureScraper'; Start-ScheduledTask -TaskName 'TemperatureScraper'
 Get-ScheduledTask -TaskName 'TemperatureScraper' | Select-Object TaskName, State
 ```
 
@@ -84,7 +85,7 @@ python test-collection.py
 
 Example output:
 
-```
+```json
 {'fan': {'Chassis Fan #1': 0.0, 'CPU Fan': 1234.0},
  'power': {'CPU Package': 45.2, 'CPU Cores': 30.1},
  'temp': {'CPU Core #1': 52.0, 'CPU Core #2': 49.0, 'CPU Package': 53.0}}
@@ -105,16 +106,29 @@ The scraper reads the following environment variables:
 
 The Prometheus endpoint is available at `http://localhost:9877/metrics` by default.
 
-Metrics are discovered dynamically from OpenHardwareMonitor and exposed using the naming pattern `ohm_{sensor_type}{sensor="..."}`. All metrics use a single `sensor` label containing the sensor name.
+Metrics are discovered dynamically from OpenHardwareMonitor using the naming pattern `ohm_{sensor_type}_{unit}`. Each metric carries three labels:
 
-| Metric | Unit | Example sensor labels |
+| Label | Description | Example |
 | --- | --- | --- |
-| `ohm_temperature_celsius{sensor="..."}` | °C | `CPU Package`, `CPU Core #1` |
-| `ohm_power_watts{sensor="..."}` | Watts | `CPU Package`, `CPU Cores` |
-| `ohm_fan_rpm{sensor="..."}` | RPM | `CPU Fan`, `Chassis Fan #1` |
-| `ohm_load_percent{sensor="..."}` | % | `CPU Total`, `CPU Core #1` |
-| `ohm_clock_megahertz{sensor="..."}` | MHz | `CPU Core #1`, `Bus Speed` |
-| `ohm_voltage_volts{sensor="..."}` | V | `CPU VCore` |
-| `ohm_data_gigabytes{sensor="..."}` | GB | `Used Memory`, `Available Memory` |
+| `sensor` | Sensor name reported by OHM | `CPU Core #1` |
+| `hardware` | Name of the hardware component the sensor belongs to | `AMD Ryzen 9 5900X` |
+| `hardware_type` | Category of the hardware component | `CPU`, `GpuNvidia`, `Mainboard`, `RAM`, `HDD` |
+
+Exposed metrics:
+
+| Metric | Unit |
+| --- | --- |
+| `ohm_temperature_celsius` | °C |
+| `ohm_power_watts` | Watts |
+| `ohm_fan_rpm` | RPM |
+| `ohm_load_percent` | % |
+| `ohm_clock_megahertz` | MHz |
+| `ohm_voltage_volts` | V |
+| `ohm_data_gigabytes` | GB |
+
+Example metric:
+```
+ohm_temperature_celsius{sensor="CPU Core #1", hardware="AMD Ryzen 9 5900X", hardware_type="CPU"} 52.0
+```
 
 > Additional sensor types reported by OpenHardwareMonitor will be exposed automatically using the same `ohm_{sensor_type}` pattern.

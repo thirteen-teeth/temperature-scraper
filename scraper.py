@@ -10,15 +10,35 @@ from prometheus_client import start_http_server, Gauge
 
 def collect_all_sensors():
     """
-    Dynamically discovers all sensor categories and values from OpenHardwareMonitor.
-    Returns a dict keyed by SensorType, each containing a dict of {sensor_name: value}.
+    Dynamically discovers all sensor categories from OpenHardwareMonitor,
+    enriched with hardware name and type by joining against the Hardware WMI class.
+
+    Returns a dict keyed by SensorType, each containing a list of sensor reading dicts:
+      {
+        'Temperature': [
+          {'name': 'CPU Core #1', 'value': 52.0, 'hardware': 'AMD Ryzen 9 5900X', 'hardware_type': 'CPU'},
+          ...
+        ],
+        ...
+      }
     """
     w = wmi.WMI(namespace="root\\OpenHardwareMonitor")
-    sensors = w.Sensor()
 
-    values = defaultdict(dict)
-    for sensor in sensors:
-        values[sensor.SensorType][sensor.Name] = sensor.Value
+    # Build a lookup of hardware by Identifier so sensors can resolve their parent.
+    hardware_by_id = {
+        hw.Identifier: {'name': hw.Name, 'type': hw.HardwareType}
+        for hw in w.Hardware()
+    }
+
+    values = defaultdict(list)
+    for sensor in w.Sensor():
+        hw = hardware_by_id.get(sensor.Parent, {})
+        values[sensor.SensorType].append({
+            'name':          sensor.Name,
+            'value':         sensor.Value,
+            'hardware':      hw.get('name', 'Unknown'),
+            'hardware_type': hw.get('type', 'Unknown'),
+        })
 
     return dict(values)
 
@@ -55,7 +75,9 @@ class AppMetrics:
             description = SENSOR_TYPE_UNITS.get(sensor_type, {}).get(
                 'description', f"OpenHardwareMonitor {sensor_type} sensor readings"
             )
-            self.gauges[sensor_type] = Gauge(metric_name, description, ["sensor"])
+            self.gauges[sensor_type] = Gauge(
+                metric_name, description, ["sensor", "hardware", "hardware_type"]
+            )
         return self.gauges[sensor_type]
 
     def run_metrics_loop(self):
@@ -68,9 +90,13 @@ class AppMetrics:
 
         for sensor_type, readings in data.items():
             gauge = self._get_or_create_gauge(sensor_type)
-            for sensor_name, value in readings.items():
-                if value is not None:
-                    gauge.labels(sensor=sensor_name).set(value)
+            for reading in readings:
+                if reading['value'] is not None:
+                    gauge.labels(
+                        sensor=reading['name'],
+                        hardware=reading['hardware'],
+                        hardware_type=reading['hardware_type'],
+                    ).set(reading['value'])
 
 def main():
     polling_interval_seconds = int(os.getenv("POLLING_INTERVAL_SECONDS", "5"))

@@ -1,20 +1,31 @@
 import wmi
+from collections import defaultdict
 from pprint import pprint
-import json
+
+def collect_all_sensors():
+    """
+    Dynamically discovers all sensor categories and values from OpenHardwareMonitor.
+    Returns a dict keyed by SensorType, each containing a dict of {sensor_name: value}.
+    """
+    w = wmi.WMI(namespace="root\\OpenHardwareMonitor")
+    sensors = w.Sensor()
+
+    values = defaultdict(dict)
+    for sensor in sensors:
+        sensor_type = sensor.SensorType
+        values[sensor_type][sensor.Name] = sensor.Value
+
+    return dict(values)
 
 def main():
-    w = wmi.WMI(namespace="root\OpenHardwareMonitor")
-    temperature_infos = w.Sensor()
-    values = { 'temp': {}, 'power': {}, 'fan': {} }
-    for sensor in temperature_infos:
-        if sensor.SensorType==u'Temperature':
-            values['temp'][sensor.Name] = sensor.Value
-        if sensor.SensorType==u'Power':
-            values['power'][sensor.Name] = sensor.Value
-        if sensor.SensorType==u'Fan':
-            values['fan'][sensor.Name] = sensor.Value
+    data = collect_all_sensors()
 
-    pprint(values)
+    print(f"Discovered {len(data)} sensor categories:\n")
+    for sensor_type, readings in sorted(data.items()):
+        print(f"[{sensor_type}]")
+        for name, value in sorted(readings.items()):
+            print(f"  {name}: {value}")
+        print()
 
 if __name__ == "__main__":
     main()

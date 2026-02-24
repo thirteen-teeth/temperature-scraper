@@ -1,12 +1,13 @@
 # temperature-scraper
 
-Collects Windows hardware sensor data (temperature, power, fan) from Open Hardware Monitor and exposes it as Prometheus metrics.
+Collects Windows hardware sensor data (temperature, power, fan) from [OpenHardwareMonitor (hexagon-oss fork)](https://github.com/hexagon-oss/openhardwaremonitor) and exposes it as Prometheus metrics.
 
 ## Requirements
 
 - Windows
 - Python 3.9+
 - PowerShell (run as Administrator for setup)
+- [.NET 8.0 Desktop Runtime](https://aka.ms/dotnet/8/desktop-runtime-win-x64.exe) (installed automatically by `setup.ps1`)
 
 ## Setup
 
@@ -51,6 +52,15 @@ Stop-ScheduledTask -TaskName 'TemperatureScraper'; Start-ScheduledTask -TaskName
 Get-ScheduledTask -TaskName 'TemperatureScraper' | Select-Object TaskName, State
 ```
 
+### Manage the OpenHardwareMonitor service
+
+```powershell
+Start-Service -Name 'OpenHardwareMonitor'
+Stop-Service -Name 'OpenHardwareMonitor'
+Restart-Service -Name 'OpenHardwareMonitor'
+Get-Service -Name 'OpenHardwareMonitor' | Select-Object Name, Status
+```
+
 ## Manual Virtual Environment Setup
 
 If you prefer to set up the Python environment without running `setup.ps1`, or want to work on the project manually:
@@ -74,12 +84,12 @@ deactivate
 
 ## Testing Sensor Collection
 
-`test-collection.py` queries OpenHardwareMonitor directly via WMI and prints all detected sensor values. Use it to verify that OHM is running and sensors are being exposed correctly before running the full scraper.
+`test-collection.py` queries OpenHardwareMonitor directly via its REST API (`/data.json`) and prints all detected sensor values. Use it to verify that OHM is running and sensors are being exposed correctly before running the full scraper.
 
 Activate the virtual environment first, then run:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+.\venv\Scripts\Activate.ps1
 python test-collection.py
 ```
 
@@ -91,7 +101,7 @@ Example output:
  'temp': {'CPU Core #1': 52.0, 'CPU Core #2': 49.0, 'CPU Package': 53.0}}
 ```
 
-> **Note:** OpenHardwareMonitor must be running (as a service or standalone) for WMI sensor data to be available.
+> **Note:** OpenHardwareMonitor must be running (as a service or standalone) with its web server enabled (port 8086) for sensor data to be available.
 
 ## Configuration
 
@@ -99,6 +109,7 @@ The scraper reads the following environment variables:
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `OHM_URL` | `http://localhost:8086` | Base URL of the OHM web server |
 | `POLLING_INTERVAL_SECONDS` | `5` | How often to poll OHM sensors |
 | `EXPORTER_PORT` | `9877` | Port the Prometheus HTTP server listens on |
 
@@ -112,7 +123,7 @@ Metrics are discovered dynamically from OpenHardwareMonitor using the naming pat
 | --- | --- | --- |
 | `sensor` | Sensor name reported by OHM | `CPU Core #1` |
 | `hardware` | Name of the hardware component the sensor belongs to | `AMD Ryzen 9 5900X` |
-| `hardware_type` | Category of the hardware component | `CPU`, `GpuNvidia`, `Mainboard`, `RAM`, `HDD` |
+| `hardware_type` | Category of the hardware component | `CPU`, `GPU`, `Mainboard`, `RAM`, `Storage` |
 
 Exposed metrics:
 

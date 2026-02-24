@@ -39,8 +39,9 @@ $ScraperScript    = Join-Path $ScriptDir "scraper.py"
 $RequirementsPath = Join-Path $ScriptDir "requirements.txt"
 
 $OhmDir           = "C:\Program Files\OpenHardwareMonitor"
-$OhmZip           = "$env:TEMP\openhardwaremonitor.zip"
+$OhmSetupExe      = "$env:TEMP\OpenHardwareMonitorSetup.exe"
 $OhmExe           = "$OhmDir\OpenHardwareMonitor.exe"
+$OhmSettingsPath  = "$OhmDir\OpenHardwareMonitor.settings"
 $NssmZip          = "$env:TEMP\nssm.zip"
 $NssmDir          = "$env:TEMP\nssm"
 $NssmExe          = "$NssmDir\nssm-2.24\win64\nssm.exe"
@@ -81,7 +82,7 @@ if ($Uninstall) {
     }
 
     # Clean up temp files
-    foreach ($f in @($OhmZip, $NssmZip)) {
+    foreach ($f in @($OhmSetupExe, $NssmZip)) {
         if (Test-Path $f) { Remove-Item $f -Force }
     }
     if (Test-Path $NssmDir) { Remove-Item $NssmDir -Recurse -Force }
@@ -100,52 +101,101 @@ if ($SkipOHM) {
 
     $ohmSvc = Get-Service -Name $OhmServiceName -ErrorAction SilentlyContinue
 
-    if ($ohmSvc -and (Test-Path $OhmExe)) {
-        # Already installed - just ensure it is running
+    # -- Resolve latest release version and download URL from GitHub --
+    Write-Host "Resolving latest OHM release from GitHub (hexagon-oss fork)..."
+    $latestVersion   = "1.0.3.0"  # fallback
+    $ohmInstallerUrl = "https://github.com/hexagon-oss/openhardwaremonitor/releases/download/v1.0.3.0/OpenHardwareMonitorSetup.exe"
+    try {
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/hexagon-oss/openhardwaremonitor/releases/latest" -UseBasicParsing
+        $latestVersion = $release.tag_name.TrimStart('v')
+        $asset = $release.assets | Where-Object { $_.name -like '*.exe' } | Select-Object -First 1
+        if ($asset) { $ohmInstallerUrl = $asset.browser_download_url }
+        Write-Host "Latest release: v$latestVersion" -ForegroundColor Cyan
+    } catch {
+        Write-Host "Could not query GitHub API - using fallback v$latestVersion." -ForegroundColor Yellow
+    }
+
+    # -- Check which version is currently installed (via registry) --
+    $installedVersion = $null
+    $ohmRegEntry = Get-ChildItem `
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' `
+        -ErrorAction SilentlyContinue |
+        Get-ItemProperty -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like '*OpenHardwareMonitor*' } |
+        Select-Object -First 1
+    if ($ohmRegEntry) { $installedVersion = $ohmRegEntry.DisplayVersion }
+
+    $versionOk = $installedVersion -and ($installedVersion -eq $latestVersion)
+
+    if ($ohmSvc -and (Test-Path $OhmExe) -and $versionOk) {
+        Write-Host "OpenHardwareMonitor v$installedVersion (hexagon-oss) is already installed and up to date." -ForegroundColor Green
         if ($ohmSvc.Status -ne "Running") {
-            Write-Host "OHM service exists but is not running - starting it..." -ForegroundColor Yellow
+            Write-Host "OHM service is not running - starting it..." -ForegroundColor Yellow
             Start-Service -Name $OhmServiceName
-        } else {
-            Write-Host "OpenHardwareMonitor is already installed and running - skipping." -ForegroundColor Green
         }
     } else {
-        Write-Host "Installing OpenHardwareMonitor as a service..." -ForegroundColor Cyan
+        if ($installedVersion -and -not $versionOk) {
+            Write-Host "Version mismatch: installed=v$installedVersion, latest=v$latestVersion - reinstalling..." -ForegroundColor Yellow
+        } elseif (-not $installedVersion -and $ohmSvc) {
+            Write-Host "OHM service exists but is not from the hexagon-oss fork - reinstalling..." -ForegroundColor Yellow
+        } else {
+            Write-Host "Installing OpenHardwareMonitor v$latestVersion (hexagon-oss fork) as a service..." -ForegroundColor Cyan
+        }
+        $nssmUrl = "https://nssm.cc/release/nssm-2.24.zip"
 
-        $fallbackOhmUrl = "https://openhardwaremonitor.org/files/openhardwaremonitor-v0.9.6.zip"
-        $nssmUrl        = "https://nssm.cc/release/nssm-2.24.zip"
-
-        # Try to resolve the latest release from the OHM homepage
-        $ohmUrl = $fallbackOhmUrl
-        try {
-            $resp  = Invoke-WebRequest -Uri "https://openhardwaremonitor.org/" -UseBasicParsing
-            $match = [regex]::Match(
-                $resp.Content,
-                "openhardwaremonitor-v\d+\.\d+\.\d+\.zip",
-                [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-            )
-            if ($match.Success) { $ohmUrl = "https://openhardwaremonitor.org/files/$($match.Value)" }
-        } catch {
-            Write-Host "Could not fetch latest OHM version - using fallback URL." -ForegroundColor Yellow
+        # -- .NET 8 Desktop Runtime (required by OHM v1.x) --
+        Write-Host "Checking .NET 8 Desktop Runtime..."
+        $dotnetRuntimes = & dotnet --list-runtimes 2>$null
+        $hasDotnet8 = $dotnetRuntimes | Where-Object { $_ -match 'Microsoft\.WindowsDesktop\.App 8\.' }
+        if (-not $hasDotnet8) {
+            Write-Host ".NET 8 Desktop Runtime not found - installing via winget..." -ForegroundColor Yellow
+            $winget = Get-Command winget -ErrorAction SilentlyContinue
+            if ($winget) {
+                & winget install Microsoft.DotNet.DesktopRuntime.8 --silent --accept-package-agreements --accept-source-agreements
+            } else {
+                Write-Warning "winget not available. Please install .NET 8 Desktop Runtime manually from https://aka.ms/dotnet/8/desktop-runtime-win-x64.exe then re-run this script."
+                exit 1
+            }
+        } else {
+            Write-Host ".NET 8 Desktop Runtime is already installed." -ForegroundColor Green
         }
 
-        Write-Host "Downloading OpenHardwareMonitor..."
-        Invoke-WebRequest -Uri $ohmUrl -OutFile $OhmZip
-        $ohmExtractTemp = "$env:TEMP\ohm-extract"
-        if (Test-Path $ohmExtractTemp) { Remove-Item $ohmExtractTemp -Recurse -Force }
-        Expand-Archive -Path $OhmZip -DestinationPath $ohmExtractTemp
+        Write-Host "Downloading OpenHardwareMonitor v$latestVersion installer..."
+        Invoke-WebRequest -Uri $ohmInstallerUrl -OutFile $OhmSetupExe
 
-        # The zip may contain a subdirectory - find the exe wherever it landed
-        $ohmExeFound = Get-ChildItem -Path $ohmExtractTemp -Filter "OpenHardwareMonitor.exe" -Recurse | Select-Object -First 1
-        if (-not $ohmExeFound) {
-            Write-Error "Could not find OpenHardwareMonitor.exe in the downloaded archive."
+        # Stop and remove existing OHM service before reinstalling
+        if ($ohmSvc) {
+            if ($ohmSvc.Status -ne "Stopped") { Stop-Service -Name $OhmServiceName -Force }
+            sc.exe delete $OhmServiceName | Out-Null
+            Write-Host "Removed existing OHM service." -ForegroundColor Yellow
+            Start-Sleep -Seconds 2
+        }
+
+        Write-Host "Running OpenHardwareMonitor installer silently..."
+        Start-Process -FilePath $OhmSetupExe -ArgumentList '/VERYSILENT', '/NORESTART', '/SUPPRESSMSGBOXES' -Wait
+
+        # Locate the installed exe (try registry first, then default path)
+        if (-not (Test-Path $OhmExe)) {
+            $regKey = Get-ChildItem `
+                'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' `
+                -ErrorAction SilentlyContinue |
+                Get-ItemProperty -ErrorAction SilentlyContinue |
+                Where-Object { $_.DisplayName -like '*OpenHardwareMonitor*' } |
+                Select-Object -First 1
+            if ($regKey -and $regKey.InstallLocation) {
+                $OhmExe = Join-Path $regKey.InstallLocation 'OpenHardwareMonitor.exe'
+                $OhmDir = $regKey.InstallLocation.TrimEnd('\')
+            }
+        }
+        if (-not (Test-Path $OhmExe)) {
+            Write-Error "OpenHardwareMonitor.exe not found after installation. Expected: $OhmExe"
             exit 1
         }
-        if (Test-Path $OhmDir) { Remove-Item $OhmDir -Recurse -Force }
-        Move-Item -Path $ohmExeFound.DirectoryName -Destination $OhmDir
-        Remove-Item $ohmExtractTemp -Recurse -Force -ErrorAction SilentlyContinue
-        $OhmExe = Join-Path $OhmDir "OpenHardwareMonitor.exe"
+        Write-Host "OHM installed at: $OhmDir" -ForegroundColor Green
 
-        # Download NSSM only if not already extracted
+        # -- Download NSSM (only if not already present) --
         if (Test-Path $NssmExe) {
             Write-Host "NSSM already present - skipping download." -ForegroundColor Yellow
         } else {
@@ -155,15 +205,8 @@ if ($SkipOHM) {
             Expand-Archive -Path $NssmZip -DestinationPath $NssmDir
         }
 
-        # Remove existing (broken) service if present; wait for SCM to deregister
-        if ($ohmSvc) {
-            if ($ohmSvc.Status -ne "Stopped") { Stop-Service -Name $OhmServiceName -Force }
-            sc.exe delete $OhmServiceName | Out-Null
-            Write-Host "Removed existing OHM service." -ForegroundColor Yellow
-            Start-Sleep -Seconds 2
-        }
-
-        Write-Host "Installing the OHM service..."
+        # -- Register OHM as a Windows service via NSSM --
+        Write-Host "Installing the OHM Windows service..."
         & $NssmExe install $OhmServiceName $OhmExe
         & $NssmExe set     $OhmServiceName AppDirectory $OhmDir
         & $NssmExe set     $OhmServiceName Start SERVICE_AUTO_START
@@ -171,13 +214,40 @@ if ($SkipOHM) {
 
         Write-Host "Starting the OHM service..."
         & $NssmExe start $OhmServiceName
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds 3
         $ohmStatus = (Get-Service -Name $OhmServiceName -ErrorAction SilentlyContinue).Status
         if ($ohmStatus -ne "Running") {
             Write-Warning "OHM service status is '$ohmStatus' - it may still be starting. Check with: Get-Service $OhmServiceName"
         } else {
             Write-Host "OpenHardwareMonitor service installed and started." -ForegroundColor Green
         }
+    }
+
+    # -- Always ensure OHM settings are correct (web server, port, minimised) --
+    $ohmSettings = @"
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <appSettings>
+    <add key="runWebServer" value="true" />
+    <add key="allowWebServerRemoteAccess" value="true" />
+    <add key="HttpServerPort" value="8086" />
+    <add key="startMinMenuItem" value="true" />
+    <add key="minTrayMenuItem" value="true" />
+  </appSettings>
+</configuration>
+"@
+    $currentSettings = if (Test-Path $OhmSettingsPath) { [System.IO.File]::ReadAllText($OhmSettingsPath).Trim() } else { '' }
+    if ($currentSettings -ne $ohmSettings.Trim()) {
+        Write-Host "Updating OHM settings at: $OhmSettingsPath" -ForegroundColor Cyan
+        [System.IO.File]::WriteAllText($OhmSettingsPath, $ohmSettings, [System.Text.UTF8Encoding]::new($false))
+        # Restart the service so the new settings take effect
+        $liveSvc = Get-Service -Name $OhmServiceName -ErrorAction SilentlyContinue
+        if ($liveSvc -and $liveSvc.Status -eq 'Running') {
+            Write-Host "Restarting OHM service to apply updated settings..." -ForegroundColor Yellow
+            Restart-Service -Name $OhmServiceName -Force
+        }
+    } else {
+        Write-Host "OHM settings are already correct." -ForegroundColor Green
     }
 }
 
